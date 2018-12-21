@@ -5,10 +5,10 @@ import json
 
 from PIL import Image
 
-import torch
+import torchvision
 from torchvision import datasets, transforms, models
+import torch
 from torch import nn, optim
-from train import create_classifier
 
 
 def input_args():
@@ -37,44 +37,52 @@ def load_checkpoint(filepath):
         model = models.densenet201(pretrained=True)
     elif checkpoint['arch'] == 'vgg':
         model = models.vgg16(pretrained=True)
-    else:
-        print('Missing arch')
 
     # Freeze params of pre-trained model
     for param in model.parameters():
         param.requires_grad = False
 
-    # Create classifier
-    classifier = create_classifier(checkpoint['input_size'],
-                                   checkpoint['hidden_units'],
-                                   checkpoint['output_size'])
+    model.classifier = checkpoint['classifier']
+    model.load_state_dict(checkpoint['state_dict'])
+    model.optimizer = checkpoint['optimizer']
+    model.class_to_idx = checkpoint['class_to_idx']
 
-    model.classifier = classifier
-    model.load_state_dict(checkpoint['model'])
-    optimizer = optim.Adam(model.classifier.parameters(), lr=0.001)
-    optimizer.load_state_dict(checkpoint['optimizer'])
-    epochs = checkpoint['epochs']
-    class_names = checkpoint['class_names']
-
-    return model, optimizer, epochs, class_names
+    return model
 
 
 def process_image(image):
-    image = image.resize((256, 256))
-    image = image.crop((16, 16, 240, 240))
-    image = np.array(image)
-    image = image / 256
+    # Resize image
+    width, height = image.size
+    size = 256
+
+    height = int(size) if height > width else int(max(height * size/width, 1))
+    width = int(size) if height < width else int(max(height * size/width, 1))
+
+    resized_image = image.resize((width, height))
+
+    # Crop Image
+    crop_size = 224
+    crop_width, crop_height = resized_image.size
+    x1 = (crop_width - crop_size) / 2
+    x2 = (crop_height - crop_size) / 2
+    x3 = x1 + crop_size
+    x4 = x2 + crop_size
+
+    crop_image = resized_image.crop((x1, x2, x3, x4))
+
+    # Convert color channel values
+    np_image = np.array(crop_image) / 255
 
     mean = np.array([0.485, 0.456, 0.406])
     std = np.array([0.229, 0.224, 0.225])
 
-    image = (image - mean) / std
-    image = image.transpose((2, 0, 1))
+    np_image = (np_image - mean) / std
+    np_image = np_image.transpose((2, 0, 1))
 
-    return image
+    return np_image
 
 
-def predict(image_path, model, topk, device):
+def predict(image_path, model, topk, device, labels):
     # Set model to eval mode
     model.eval()
     model.to(device)
@@ -88,11 +96,18 @@ def predict(image_path, model, topk, device):
     img = torch.from_numpy(img)
 
     inputs = img.to(device)
-    output = model.forward(inputs.float())
-    ps = torch.exp(output)
-    topk = ps.cpu().topk(topk)
+    with torch.no_grad():
+        output = model.forward(inputs.float())
+        ps = torch.exp(output)
+        probs, classes = torch.topk(ps, topk)
 
-    return (i.data.numpy().squeeze().tolist() for i in topk)
+        index_to_class = {
+                    model.class_to_idx[x]: x for x in model.class_to_idx}
+        top_classes = [
+                    index_to_class[each] for each in classes.cpu().numpy()[0]]
+        flower_names = [labels.get(str(each)) for each in top_classes]
+
+    return probs.cpu().numpy()[0], top_classes, flower_names
 
 
 def main():
@@ -118,21 +133,20 @@ def main():
         device = torch.device('cpu')
     print(f'Current device: {device}')
 
-    model, _, _, class_names = load_checkpoint(checkpoint)
+    model = load_checkpoint(checkpoint)
 
     # Label Mapping
     with open(labels, 'r') as f:
         cat_to_name = json.load(f)
 
-    probs, classes = predict(image_path, model, top_k, device)
-
-    flowers = [cat_to_name[class_names[i]] for i in classes]
+    probs, _, flower_names = predict(
+                                image_path, model, top_k, device, cat_to_name)
 
     # Prediction
     print('*'*5+'Predictions'+'*'*5)
 
-    for prob, flower in zip(probs, flowers):
-        print('{:20}: {:.2f}%'.format(flower, prob * 100))
+    for prob, flower_name in zip(probs, flower_names):
+        print('{:20}: {:.2f}%'.format(flower_name, prob * 100))
 
 
 if __name__ == '__main__':

@@ -134,15 +134,12 @@ def create_classifier(num_input_features, hidden_units, num_output_features):
     return classifier
 
 
-def save_checkpoint(num_input_features, class_names, epochs, model, optimizer,
-                    arch, hidden_units):
-    checkpoint = {'input_size': num_input_features,
-                  'output_size': 102,
-                  'hidden_units': hidden_units,
+def save_checkpoint(epochs, model, optimizer, arch):
+    checkpoint = {'classifier': model.classifier,
                   'epochs': epochs,
-                  'model': model.state_dict(),
-                  'optimizer': optimizer.state_dict(),
-                  'class_names': model.class_names,
+                  'state_dict': model.state_dict(),
+                  'optimizer': optimizer,
+                  'class_to_idx': model.class_to_idx,
                   'arch': arch}
 
     torch.save(checkpoint, 'checkpoint.pth')
@@ -258,8 +255,6 @@ def main():
                         epochs)
 
     model.class_to_idx = train_data.class_to_idx
-    class_names = train_data.classes
-    model.class_names = class_names
 
     # Test model
     print('*'*5+'Testing'+'*'*5)
@@ -267,13 +262,7 @@ def main():
 
     # Save checkpoint
     print('*'*5+'Saving Checkpoint'+'*'*5)
-    save_checkpoint(num_input_features,
-                    class_names,
-                    epochs,
-                    model,
-                    optimizer,
-                    arch,
-                    hidden_units)
+    save_checkpoint(epochs, model, optimizer, arch)
 
 
 if __name__ == '__main__':
